@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pastoral Meadow</title>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.8.0/lib/p5.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #e0f7fa;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+
+<base target="_self">
+
+
+    <div id="canvas-container"></div>
+
+    <script>
+        const sketch = (p) => {
+            // Colors
+            const colors = {
+                skyDay: [135, 206, 235],
+                skyNight: [25, 25, 112],
+                grass: [34, 139, 34],
+                rabbit: [220, 220, 220],
+                carrot: [255, 165, 0],
+                carrotTop: [50, 205, 50],
+                flower1: [255, 105, 180],
+                flower2: [255, 215, 0],
+                flower3: [138, 43, 226],
+                butterfly1: [255, 69, 0],
+                butterfly2: [75, 0, 130],
+                butterfly3: [255, 255, 0]
+            };
+
+            // Game state
+            let rabbit = {
+                x: 0,
+                y: 0,
+                size: 40,
+                speed: 2,
+                targetX: 0,
+                targetY: 0,
+                isMoving: false,
+                angle: 0,
+                stretch: 1,
+                squash: 1
+            };
+
+            let flowers = [];
+            let butterflies = [];
+            let carrots = [];
+            let timeOfDay = 0; // 0-1, 0=day, 1=night
+            let dayCycleSpeed = 0.0005;
+            let mouseActive = false;
+            let lastMouseMove = 0;
+            let audioContext;
+            let windSound;
+            let hopSound;
+            let rustleSound;
+
+            p.setup = () => {
+                let canvas = p.createCanvas(p.windowWidth, p.windowHeight);
+                canvas.parent('canvas-container');
+                p.colorMode(p.RGB);
+                p.rectMode(p.CENTER);
+                p.ellipseMode(p.CENTER);
+
+                // Initialize rabbit position
+                rabbit.x = p.width / 2;
+                rabbit.y = p.height / 2;
+
+                // Create initial flowers
+                for (let i = 0; i < 20; i++) {
+                    createFlower();
+                }
+
+                // Create initial butterflies
+                for (let i = 0; i < 5; i++) {
+                    createButterfly();
+                }
+
+                // Initialize audio
+                initAudio();
+            };
+
+            function initAudio() {
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    
+                    // Create wind sound
+                    const windOsc = audioContext.createOscillator();
+                    windOsc.type = 'sine';
+                    windOsc.frequency.value = 80;
+                    
+                    const windGain = audioContext.createGain();
+                    windGain.gain.value = 0.1;
+                    
+                    const windLFO = audioContext.createOscillator();
+                    windLFO.type = 'sine';
+                    windLFO.frequency.value = 0.2;
+                    
+                    const windLFOGain = audioContext.createGain();
+                    windLFOGain.gain.value = 30;
+                    
+                    windLFO.connect(windLFOGain);
+                    windLFOGain.connect(windOsc.frequency);
+                    
+                    windOsc.connect(windGain);
+                    windGain.connect(audioContext.destination);
+                    
+                    windOsc.start();
+                    windLFO.start();
+                    
+                    windSound = {
+                        osc: windOsc,
+                        gain: windGain,
+                        lfo: windLFO,
+                        lfoGain: windLFOGain
+                    };
+
+                    // Create hop sound
+                    hopSound = () => {
+                        const now = audioContext.currentTime;
+                        const osc = audioContext.createOscillator();
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(400, now);
+                        osc.frequency.exponentialRampToValueAtTime(100, now + 0.2);
+                        
+                        const gain = audioContext.createGain();
+                        gain.gain.setValueAtTime(0.1, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                        
+                        osc.connect(gain);
+                        gain.connect(audioContext.destination);
+                        
+                        osc.start();
+                        osc.stop(now + 0.2);
+                    };
+
+                    // Create rustle sound
+                    rustleSound = () => {
+                        const now = audioContext.currentTime;
+                        const noise = audioContext.createBufferSource();
+                        const buffer = audioContext.createBuffer(1, audioContext.sampleRate * 0.1, audioContext.sampleRate);
+                        const data = buffer.getChannelData(0);
+                        
+                        for (let i = 0; i < data.length; i++) {
+                            data[i] = Math.random() * 2 - 1;
+                        }
+                        
+                        noise.buffer = buffer;
+                        
+                        const filter = audioContext.createBiquadFilter();
+                        filter.type = 'bandpass';
+                        filter.frequency.value = 1000;
+                        filter.Q.value = 1;
+                        
+                        const gain = audioContext.createGain();
+                        gain.gain.setValueAtTime(0.05, now);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                        
+                        noise.connect(filter);
+                        filter.connect(gain);
+                        gain.connect(audioContext.destination);
+                        
+                        noise.start();
+                        noise.stop(now + 0.1);
+                    };
+
+                } catch (e) {
+                    console.log("Audio not supported:", e);
+                }
+            }
+
+            function createFlower() {
+                const flowerTypes = ['daisy', 'tulip', 'rose'];
+                const type = p.random(flowerTypes);
+                const x = p.random(p.width);
+                const y = p.random(p.height * 0.7, p.height * 0.95);
+                const size = p.random(20, 40);
+                const growthStage = p.random(0.2, 0.8);
+                const growthRate = p.random(0.001, 0.003);
+                const color = p.random([colors.flower1, colors.flower2, colors.flower3]);
+                
+                flowers.push({
+                    x, y, size, type, growthStage, growthRate, color,
+                    stemHeight: p.random(30, 80),
+                    stemWidth: p.random(2, 5),
+                    sway: p.random(0, p.TWO_PI),
+                    swaySpeed: p.random(0.01, 0.03)
+                });
+            }
+
+            function createButterfly() {
+                const x = p.random(p.width);
+                const y = p.random(p.height * 0.2, p.height * 0.8);
+                const size = p.random(15, 25);
+                const color = p.random([colors.butterfly1, colors.butterfly2, colors.butterfly3]);
+                const speed = p.random(1, 3);
+                const angle = p.random(p.TWO_PI);
+                const wingAngle = 0;
+                const wingSpeed = p.random(0.1, 0.3);
+                
+                butterflies.push({
+                    x, y, size, color, speed, angle, wingAngle, wingSpeed,
+                    targetX: x + p.random(-100, 100),
+                    targetY: y + p.random(-100, 100),
+                    changeTargetTime: p.random(60, 180)
+                });
+            }
+
+            function createCarrot(x, y) {
+                carrots.push({
+                    x, y,
+                    growthStage: 0,
+                    growthRate: p.random(0.005, 0.01),
+                    size: 10,
+                    wiggle: 0,
+                    wiggleSpeed: p.random(0.05, 0.1)
+                });
+                if (rustleSound) rustleSound();
+            }
+
+            p.draw = () => {
+                // Update time of day
+                timeOfDay = (timeOfDay + dayCycleSpeed) % 1;
+                
+                // Draw sky with day/night cycle
+                drawSky();
+                
+                // Draw grass
+                drawGrass();
+                
+                // Update and draw flowers
+                updateFlowers();
+                
+                // Update and draw butterflies
+                updateButterflies();
+                
+                // Update and draw carrots
+                updateCarrots();
+                
+                // Update and draw rabbit
+                updateRabbit();
+                
+                // Draw sun/moon
+                drawCelestialBody();
+                
+                // Adjust wind sound based on time of day
+                if (windSound) {
+                    const windIntensity = p.map(p.sin(timeOfDay * p.PI), 0, 1, 0.05, 0.2);
+                    windSound.gain.gain.setValueAtTime(windIntensity, audioContext.currentTime);
+                }
+            };
+
+            function drawSky() {
+                // Interpolate between day and night sky colors
+                const skyColor = [
+                    p.lerp(colors.skyDay[0], colors.skyNight[0], timeOfDay),
+                    p.lerp(colors.skyDay[1], colors.skyNight[1], timeOfDay),
+                    p.lerp(colors.skyDay[2], colors.skyNight[2], timeOfDay)
+                ];
+                
+                p.background(skyColor[0], skyColor[1], skyColor[2]);
+                
+                // Draw gradient horizon
+                const horizonHeight = p.height * 0.7;
+                for (let y = 0; y < horizonHeight; y++) {
+                    const interp = y / horizonHeight;
+                    const r = p.lerp(skyColor[0], colors.grass[0] * 0.7, interp);
+                    const g = p.lerp(skyColor[1], colors.grass[1] * 0.7, interp);
+                    const b = p.lerp(skyColor[2], colors.grass[2] * 0.7, interp);
+                    p.stroke(r, g, b);
+                    p.line(0, y, p.width, y);
+                }
+            }
+
+            function drawGrass() {
+                p.noStroke();
+                p.fill(colors.grass[0], colors.grass[1], colors.grass[2]);
+                p.rect(p.width/2, p.height * 0.85, p.width, p.height * 0.3);
+                
+                // Draw grass blades
+                p.stroke(0, 100, 0);
+                for (let i = 0; i < 200; i++) {
+                    const x = p.random(p.width);
+                    const y = p.random(p.height * 0.7, p.height);
+                    const height = p.random(10, 30);
+                    const sway = p.sin(timeOfDay * p.PI * 2 + x * 0.01) * 5;
+                    p.line(x, y, x + sway, y - height);
+                }
+            }
+
+            function updateFlowers() {
+                for (let flower of flowers) {
+                    // Grow flowers
+                    if (flower.growthStage < 1) {
+                        flower.growthStage = p.min(1, flower.growthStage + flower.growthRate);
+                    }
+                    
+                    // Sway with wind
+                    flower.sway += flower.swaySpeed;
+                    
+                    // Draw flower
+                    drawFlower(flower);
+                }
+            }
+
+            function drawFlower(flower) {
+                const currentSize = flower.size * flower.growthStage;
+                const swayAmount = p.sin(flower.sway) * 5 * flower.growthStage;
+                
+                // Draw stem
+                p.stroke(0, 100, 0);
+                p.strokeWeight(flower.stemWidth * flower.growthStage);
+                p.line(
+                    flower.x, 
+                    flower.y, 
+                    flower.x + swayAmount, 
+                    flower.y - flower.stemHeight * flower.growthStage
+                );
+                
+                // Draw flower based on type
+                p.noStroke();
+                p.fill(flower.color);
+                
+                if (flower.type === 'daisy') {
+                    // Center
+                    p.ellipse(
+                        flower.x + swayAmount, 
+                        flower.y - flower.stemHeight * flower.growthStage, 
+                        currentSize * 0.4, 
+                        currentSize * 0.4
+                    );
+                    
+                    // Petals
+                    p.fill(255);
+                    for (let i = 0; i < 8; i++) {
+                        const angle = i * p.TWO_PI / 8;
+                        const petalX = flower.x + swayAmount + p.cos(angle) * currentSize * 0.6;
+                        const petalY = flower.y - flower.stemHeight * flower.growthStage + p.sin(angle) * currentSize * 0.6;
+                        p.ellipse(petalX, petalY, currentSize * 0.5, currentSize * 0.2);
+                    }
+                } else if (flower.type === 'tulip') {
+                    p.beginShape();
+                    p.vertex(
+                        flower.x + swayAmount - currentSize * 0.3, 
+                        flower.y - flower.stemHeight * flower.growthStage + currentSize * 0.2
+                    );
+                    p.vertex(
+                        flower.x + swayAmount, 
+                        flower.y - flower.stemHeight * flower.growthStage - currentSize * 0.5
+                    );
+                    p.vertex(
+                        flower.x + swayAmount + currentSize * 0.3, 
+                        flower.y - flower.stemHeight * flower.growthStage + currentSize * 0.2
+                    );
+                    p.endShape(p.CLOSE);
+                } else if (flower.type === 'rose') {
+                    for (let i = 0; i < 5; i++) {
+                        const angle = i * p.TWO_PI / 5 + flower.sway * 0.5;
+                        const petalX = flower.x + swayAmount + p.cos(angle) * currentSize * 0.4;
+                        const petalY = flower.y - flower.stemHeight * flower.growthStage + p.sin(angle) * currentSize * 0.4;
+                        p.ellipse(petalX, petalY, currentSize * 0.6, currentSize * 0.6);
+                    }
+                }
+            }
+
+            function updateButterflies() {
+                for (let butterfly of butterflies) {
+                    // Update wing animation
+                    butterfly.wingAngle += butterfly.wingSpeed;
+                    
+                    // Update position toward target
+                    const dx = butterfly.targetX - butterfly.x;
+                    const dy = butterfly.targetY - butterfly.y;
+                    const dist = p.sqrt(dx * dx + dy * dy);
+                    
+                    if (dist < 10 || p.frameCount % butterfly.changeTargetTime === 0) {
+                        // Find new target near a flower
+                        if (flowers.length > 0) {
+                            const flower = flowers[p.floor(p.random(flowers.length))];
+                            butterfly.targetX = flower.x + p.random(-50, 50);
+                            butterfly.targetY = flower.y - flower.stemHeight + p.random(-20, 20);
+                        } else {
+                            butterfly.targetX += p.random(-100, 100);
+                            butterfly.targetY += p.random(-100, 100);
+                        }
+                    } else {
+                        // Move toward target
+                        butterfly.angle = p.atan2(dy, dx);
+                        butterfly.x += p.cos(butterfly.angle) * butterfly.speed;
+                        butterfly.y += p.sin(butterfly.angle) * butterfly.speed;
+                    }
+                    
+                    // Keep within canvas
+                    butterfly.x = p.constrain(butterfly.x, 0, p.width);
+                    butterfly.y = p.constrain(butterfly.y, 0, p.height * 0.8);
+                    
+                    // Draw butterfly
+                    drawButterfly(butterfly);
+                }
+            }
+
+            function drawButterfly(butterfly) {
+                p.push();
+                p.translate(butterfly.x, butterfly.y);
+                p.rotate(butterfly.angle);
+                
+                // Body
+                p.fill(butterfly.color);
+                p.noStroke();
+                p.ellipse(0, 0, butterfly.size * 0.3, butterfly.size);
+                
+                // Wings
+                const wingSpread = p.sin(butterfly.wingAngle) * 0.5 + 0.5;
+                const wingAngle = wingSpread * p.QUARTER_PI;
+                
+                p.fill(butterfly.color[0], butterfly.color[1], butterfly.color[2], 200);
+                
+                // Left wings
+                p.push();
+                p.rotate(-wingAngle);
+                p.ellipse(-butterfly.size * 0.2, 0, butterfly.size, butterfly.size * 0.7);
+                p.pop();
+                
+                p.push();
+                p.rotate(-wingAngle * 0.5);
+                p.ellipse(-butterfly.size * 0.4, -butterfly.size * 0.2, butterfly.size * 0.8, butterfly.size * 0.5);
+                p.pop();
+                
+                // Right wings
+                p.push();
+                p.rotate(wingAngle);
+                p.ellipse(butterfly.size * 0.2, 0, butterfly.size, butterfly.size * 0.7);
+                p.pop();
+                
+                p.push();
+                p.rotate(wingAngle * 0.5);
+                p.ellipse(butterfly.size * 0.4, -butterfly.size * 0.2, butterfly.size * 0.8, butterfly.size * 0.5);
+                p.pop();
+                
+                p.pop();
+            }
+
+            function updateCarrots() {
+                for (let i = carrots.length - 1; i >= 0; i--) {
+                    const carrot = carrots[i];
+                    
+                    // Grow carrots
+                    if (carrot.growthStage < 1) {
+                        carrot.growthStage = p.min(1, carrot.growthStage + carrot.growthRate);
+                        carrot.size = 10 + carrot.growthStage * 20;
+                    }
+                    
+                    // Wiggle animation
+                    carrot.wiggle += carrot.wiggleSpeed;
+                    
+                    // Draw carrot
+                    drawCarrot(carrot);
+                    
+                    // Check if rabbit is near to "harvest"
+                    if (p.dist(rabbit.x, rabbit.y, carrot.x, carrot.y) < rabbit.size * 0.8 && carrot.growthStage >= 1) {
+                        // Rabbit eats carrot
+                        carrots.splice(i, 1);
+                        if (hopSound) hopSound();
+                        
+                        // Chance to create new flower
+                        if (p.random() < 0.3) {
+                            createFlower();
+                        }
+                    }
+                }
+            }
+
+            function drawCarrot(carrot) {
+                const wiggleAmount = p.sin(carrot.wiggle) * 5 * carrot.growthStage;
+                const currentSize = carrot.size * carrot.growthStage;
+                
+                // Draw greens
+                p.fill(colors.carrotTop[0], colors.carrotTop[1], colors.carrotTop[2]);
+                for (let i = 0; i < 3; i++) {
+                    const angle = i * p.TWO_PI / 3 + carrot.wiggle * 0.5;
+                    const endX = carrot.x + p.cos(angle) * currentSize * 0.5;
+                    const endY = carrot.y - currentSize + p.sin(angle) * currentSize * 0.5;
+                    p.line(carrot.x, carrot.y - currentSize * 0.7, endX, endY);
+                }
+                
+                // Draw carrot
+                p.fill(colors.carrot[0], colors.carrot[1], colors.carrot[2]);
+                p.push();
+                p.translate(carrot.x, carrot.y);
+                p.rotate(wiggleAmount * 0.01);
+                p.beginShape();
+                p.vertex(0, 0);
+                p.vertex(-currentSize * 0.2, -currentSize * 0.7);
+                p.vertex(0, -currentSize);
+                p.vertex(currentSize * 0.2, -currentSize * 0.7);
+                p.endShape(p.CLOSE);
+                p.pop();
+            }
+
+            function updateRabbit() {
+                // Check if mouse is active
+                const mouseDist = p.dist(p.mouseX, p.mouseY, rabbit.x, rabbit.y);
+                const currentTime = p.millis();
+                
+                if (mouseActive && mouseDist > rabbit.size * 2) {
+                    // Move toward mouse if active
+                    rabbit.targetX = p.mouseX;
+                    rabbit.targetY = p.mouseY;
+                    rabbit.isMoving = true;
+                    lastMouseMove = currentTime;
+                } else if (currentTime - lastMouseMove > 3000) {
+                    // If mouse inactive for 3 seconds, wander randomly
+                    if (p.random() < 0.01 || !rabbit.isMoving) {
+                        rabbit.targetX = p.constrain(rabbit.x + p.random(-100, 100), 0, p.width);
+                        rabbit.targetY = p.constrain(rabbit.y + p.random(-100, 100), p.height * 0.5, p.height);
+                        rabbit.isMoving = true;
+                    }
+                }
+                
+                // Move toward target
+                if (rabbit.isMoving) {
+                    const dx = rabbit.targetX - rabbit.x;
+                    const dy = rabbit.targetY - rabbit.y;
+                    const dist = p.sqrt(dx * dx + dy * dy);
+                    
+                    if (dist < 5) {
+                        rabbit.isMoving = false;
+                        rabbit.stretch = 1;
+                        rabbit.squash = 1;
+                    } else {
+                        rabbit.angle = p.atan2(dy, dx);
+                        
+                        // Squash and stretch animation
+                        if (dist > rabbit.speed * 2) {
+                            const animPhase = (p.frameCount % 20) / 20;
+                            rabbit.stretch = 1 + p.sin(animPhase * p.PI) * 0.3;
+                            rabbit.squash = 1 - p.sin(animPhase * p.PI) * 0.2;
+                            
+                            // Play hop sound occasionally
+                            if (animPhase < 0.1 && hopSound && p.random() < 0.3) {
+                                hopSound();
+                            }
+                        }
+                        
+                        rabbit.x += p.cos(rabbit.angle) * rabbit.speed;
+                        rabbit.y += p.sin(rabbit.angle) * rabbit.speed;
+                    }
+                }
+                
+                // Draw rabbit
+                drawRabbit();
+            }
+
+            function drawRabbit() {
+                p.push();
+                p.translate(rabbit.x, rabbit.y);
+                p.rotate(rabbit.angle);
+                
+                // Body
+                p.fill(colors.rabbit[0], colors.rabbit[1], colors.rabbit[2]);
+                p.noStroke();
+                p.ellipse(0, 0, rabbit.size * rabbit.stretch, rabbit.size * rabbit.squash);
+                
+                // Head
+                p.ellipse(rabbit.size * 0.4, 0, rabbit.size * 0.6, rabbit.size * 0.6);
+                
+                // Ears
+                p.ellipse(rabbit.size * 0.5, -rabbit.size * 0.4, rabbit.size * 0.2, rabbit.size * 0.5);
+                p.ellipse(rabbit.size * 0.3, -rabbit.size * 0.4, rabbit.size * 0.2, rabbit.size * 0.5);
+                
+                // Eyes
+                p.fill(0);
+                p.ellipse(rabbit.size * 0.5, rabbit.size * 0.05, rabbit.size * 0.1, rabbit.size * 0.1);
+                
+                // Nose
+                p.fill(255, 150, 150);
+                p.ellipse(rabbit.size * 0.6, rabbit.size * 0.1, rabbit.size * 0.15, rabbit.size * 0.1);
+                
+                p.pop();
+            }
+
+            function drawCelestialBody() {
+                const isDay = timeOfDay < 0.5;
+                const sunMoonX = p.map(timeOfDay, 0, 1, p.width * 0.2, p.width * 0.8);
+                const sunMoonY = p.map(p.sin(timeOfDay * p.PI), 0, 1, p.height * 0.8, p.height * 0.2);
+                const size = isDay ? 60 : 50;
+                
+                p.noStroke();
+                if (isDay) {
+                    p.fill(255, 255, 0);
+                } else {
+                    p.fill(220, 220, 255);
+                    // Draw moon phases
+                    p.arc(sunMoonX, sunMoonY, size, size, -p.QUARTER_PI, p.PI + p.QUARTER_PI, p.OPEN);
+                    p.fill(p.lerpColor(p.color(colors.skyNight), p.color(220, 220, 255), 0.7));
+                    p.ellipse(sunMoonX - size * 0.3, sunMoonY, size * 0.8, size * 0.8);
+                }
+                p.ellipse(sunMoonX, sunMoonY, size, size);
+            }
+
+            p.mousePressed = () => {
+                // Plant carrots when clicking on grass
+                if (p.mouseY > p.height * 0.7) {
+                    createCarrot(p.mouseX, p.mouseY);
+                }
+                mouseActive = true;
+                lastMouseMove = p.millis();
+            };
+
+            p.mouseReleased = () => {
+                mouseActive = false;
+            };
+
+            p.mouseMoved = () => {
+                lastMouseMove = p.millis();
+            };
+
+            p.touchStarted = () => {
+                if (p.mouseY > p.height * 0.7) {
+                    createCarrot(p.mouseX, p.mouseY);
+                }
+                mouseActive = true;
+                lastMouseMove = p.millis();
+                return false; // Prevent default touch behavior
+            };
+
+            p.touchEnded = () => {
+                mouseActive = false;
+                return false;
+            };
+
+            p.touchMoved = () => {
+                lastMouseMove = p.millis();
+                return false;
+            };
+
+            p.windowResized = () => {
+                p.resizeCanvas(p.windowWidth, p.windowHeight);
+            };
+        };
+
+        new p5(sketch);
+    </script>
+
+              
+          
+                
+          
+              
